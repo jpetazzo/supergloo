@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"time"
@@ -229,23 +230,33 @@ var _ = Describe("Istio Install and Encryption E2E", func() {
 			ns := &kubecore.Namespace{
 				ObjectMeta: kubemeta.ObjectMeta{
 					Name: bookinfons,
-					Labels: map[string]string{
-						"istio-injection": "enabled",
-					},
 				},
 			}
 			util.GetKubeClient().CoreV1().Namespaces().Create(ns)
 
+			newns, err := util.GetKubeClient().CoreV1().Namespaces().Get(bookinfons, kubemeta.GetOptions{})
+			Expect(err).NotTo(HaveOccurred())
+
+			if newns.Labels == nil {
+				newns.Labels = map[string]string{}
+			}
+
+			newns.Labels["istio-injection"] = "enabled"
+			_, err = util.GetKubeClient().CoreV1().Namespaces().Update(newns)
+			Expect(err).NotTo(HaveOccurred())
+
 			bookinfo := "https://raw.githubusercontent.com/istio/istio/4c0a001b5e542d43b4c66ae75c1f41f2c1ff183e/samples/bookinfo/platform/kube/bookinfo.yaml"
 			kubectlargs := []string{"apply", "-n", bookinfons, "-f", bookinfo}
 			cmd := exec.Command("kubectl", kubectlargs...)
-			err := cmd.Run()
+			cmd.Stdout = GinkgoWriter
+			cmd.Stderr = GinkgoWriter
+			err = cmd.Run()
 			Expect(err).NotTo(HaveOccurred())
 
 			return bookinfons
 		}
 
-		It("Should install istio and enable policy", func() {
+		FIt("Should install istio and enable policy", func() {
 
 			// start discovery
 			cmd := exec.Command(PathToUds, "-discover", bookinfons)
@@ -294,6 +305,10 @@ var _ = Describe("Istio Install and Encryption E2E", func() {
 
 			err = meshSyncer.Sync(context.TODO(), syncSnapshot)
 			Expect(err).NotTo(HaveOccurred())
+
+			fmt.Println("go yuval go")
+			time.Sleep(10 * time.Hour)
+
 		})
 	})
 })
