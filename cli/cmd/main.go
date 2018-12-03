@@ -5,6 +5,8 @@ import (
 	"os"
 	"time"
 
+	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
+
 	check "github.com/solo-io/go-checkpoint"
 	"github.com/solo-io/supergloo/cli/pkg/cmd"
 )
