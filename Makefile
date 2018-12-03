@@ -46,6 +46,15 @@ SOURCES=$(shell find . -name "*.go" | grep -v test )
 $(OUTPUT_DIR)/supergloo-linux-amd64: $(SOURCES)
 	CGO_ENABLED=0 GOARCH=amd64 GOOS=linux go build -o $@ cmd/main.go
 
+$(OUTPUT_DIR)/supergloo-cli-darwin-amd64: $(SOURCES)
+	CGO_ENABLED=0 GOARCH=amd64 GOOS=darwin go build -o $@ cli/cmd/main.go
+
+$(OUTPUT_DIR)/supergloo-cli-linux-amd64: $(SOURCES)
+	CGO_ENABLED=0 GOARCH=amd64 GOOS=linux go build -o $@ cli/cmd/main.go
+
+.PHONY: cli
+cli: $(OUTPUT_DIR)/supergloo-cli-darwin-amd64 $(OUTPUT_DIR)/supergloo-cli-linux-amd64
+
 
 supergloo: $(SOURCES)
 	go build -o $@ cmd/main.go
