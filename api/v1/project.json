@@ -1,4 +1,5 @@
 {
   "name": "supergloo.solo.io",
-  "version": "v1"
+  "version": "v1",
+  "docs_dir": "../../../doc/docs/v1"
 }

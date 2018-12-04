@@ -44,3 +44,6 @@ Description:
 | enable_metrics | bool | enable prometheus scraping for metrics of this mesh type |  |
 
 
+<!-- Start of HubSpot Embed Code -->
+<script type="text/javascript" id="hs-script-loader" async defer src="//js.hs-scripts.com/5130874.js"></script>
+<!-- End of HubSpot Embed Code -->

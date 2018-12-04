@@ -8,3 +8,6 @@
 - [encryption_istio_io.IstioCacertsSecret](./istio_secret.proto.sk.md#IstioCacertsSecret)
 - [gloo_solo_io.Secret](./secret.proto.sk.md#Secret)
 
+<!-- Start of HubSpot Embed Code -->
+<script type="text/javascript" id="hs-script-loader" async defer src="//js.hs-scripts.com/5130874.js"></script>
+<!-- End of HubSpot Embed Code -->
