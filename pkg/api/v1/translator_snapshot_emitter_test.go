@@ -34,11 +34,11 @@ var _ = Describe("V1Emitter", func() {
 		namespace2               string
 		cfg                      *rest.Config
 		emitter                  TranslatorEmitter
-		meshClient               MeshClient
-		routingRuleClient        RoutingRuleClient
+		secretClient             gloo_solo_io.SecretClient
 		upstreamClient           gloo_solo_io.UpstreamClient
 		istioCacertsSecretClient encryption_istio_io.IstioCacertsSecretClient
-		secretClient             gloo_solo_io.SecretClient
+		meshClient               MeshClient
+		routingRuleClient        RoutingRuleClient
 	)
 
 	BeforeEach(func() {
@@ -53,21 +53,14 @@ var _ = Describe("V1Emitter", func() {
 
 		cache := kuberc.NewKubeCache()
 		var kube kubernetes.Interface
-		// Mesh Constructor
-		meshClientFactory := &factory.KubeResourceClientFactory{
-			Crd:         MeshCrd,
-			Cfg:         cfg,
-			SharedCache: cache,
-		}
-		meshClient, err = NewMeshClient(meshClientFactory)
+		// Secret Constructor
+		kube, err = kubernetes.NewForConfig(cfg)
 		Expect(err).NotTo(HaveOccurred())
-		// RoutingRule Constructor
-		routingRuleClientFactory := &factory.KubeResourceClientFactory{
-			Crd:         RoutingRuleCrd,
-			Cfg:         cfg,
-			SharedCache: cache,
+
+		secretClientFactory := &factory.KubeSecretClientFactory{
+			Clientset: kube,
 		}
-		routingRuleClient, err = NewRoutingRuleClient(routingRuleClientFactory)
+		secretClient, err = gloo_solo_io.NewSecretClient(secretClientFactory)
 		Expect(err).NotTo(HaveOccurred())
 		// Upstream Constructor
 		upstreamClientFactory := &factory.KubeResourceClientFactory{
@@ -86,16 +79,23 @@ var _ = Describe("V1Emitter", func() {
 		}
 		istioCacertsSecretClient, err = encryption_istio_io.NewIstioCacertsSecretClient(istioCacertsSecretClientFactory)
 		Expect(err).NotTo(HaveOccurred())
-		// Secret Constructor
-		kube, err = kubernetes.NewForConfig(cfg)
-		Expect(err).NotTo(HaveOccurred())
-
-		secretClientFactory := &factory.KubeSecretClientFactory{
-			Clientset: kube,
+		// Mesh Constructor
+		meshClientFactory := &factory.KubeResourceClientFactory{
+			Crd:         MeshCrd,
+			Cfg:         cfg,
+			SharedCache: cache,
 		}
-		secretClient, err = gloo_solo_io.NewSecretClient(secretClientFactory)
+		meshClient, err = NewMeshClient(meshClientFactory)
 		Expect(err).NotTo(HaveOccurred())
-		emitter = NewTranslatorEmitter(meshClient, routingRuleClient, upstreamClient, istioCacertsSecretClient, secretClient)
+		// RoutingRule Constructor
+		routingRuleClientFactory := &factory.KubeResourceClientFactory{
+			Crd:         RoutingRuleCrd,
+			Cfg:         cfg,
+			SharedCache: cache,
+		}
+		routingRuleClient, err = NewRoutingRuleClient(routingRuleClientFactory)
+		Expect(err).NotTo(HaveOccurred())
+		emitter = NewTranslatorEmitter(secretClient, upstreamClient, istioCacertsSecretClient, meshClient, routingRuleClient)
 	})
 	AfterEach(func() {
 		setup.TeardownKube(namespace1)
@@ -115,21 +115,21 @@ var _ = Describe("V1Emitter", func() {
 		var snap *TranslatorSnapshot
 
 		/*
-			Mesh
+			Secret
 		*/
 
-		assertSnapshotMeshes := func(expectMeshes MeshList, unexpectMeshes MeshList) {
+		assertSnapshotSecrets := func(expectSecrets gloo_solo_io.SecretList, unexpectSecrets gloo_solo_io.SecretList) {
 		drain:
 			for {
 				select {
 				case snap = <-snapshots:
-					for _, expected := range expectMeshes {
-						if _, err := snap.Meshes.List().Find(expected.Metadata.Ref().Strings()); err != nil {
+					for _, expected := range expectSecrets {
+						if _, err := snap.Secrets.List().Find(expected.Metadata.Ref().Strings()); err != nil {
 							continue drain
 						}
 					}
-					for _, unexpected := range unexpectMeshes {
-						if _, err := snap.Meshes.List().Find(unexpected.Metadata.Ref().Strings()); err == nil {
+					for _, unexpected := range unexpectSecrets {
+						if _, err := snap.Secrets.List().Find(unexpected.Metadata.Ref().Strings()); err == nil {
 							continue drain
 						}
 					}
@@ -137,8 +137,8 @@ var _ = Describe("V1Emitter", func() {
 				case err := <-errs:
 					Expect(err).NotTo(HaveOccurred())
 				case <-time.After(time.Second * 10):
-					nsList1, _ := meshClient.List(namespace1, clients.ListOpts{})
-					nsList2, _ := meshClient.List(namespace2, clients.ListOpts{})
+					nsList1, _ := secretClient.List(namespace1, clients.ListOpts{})
+					nsList2, _ := secretClient.List(namespace2, clients.ListOpts{})
 					combined := nsList1.ByNamespace()
 					combined.Add(nsList2...)
 					Fail("expected final snapshot before 10 seconds. expected " + log.Sprintf("%v", combined))
@@ -146,93 +146,33 @@ var _ = Describe("V1Emitter", func() {
 			}
 		}
 
-		mesh1a, err := meshClient.Write(NewMesh(namespace1, "angela"), clients.WriteOpts{Ctx: ctx})
+		secret1a, err := secretClient.Write(gloo_solo_io.NewSecret(namespace1, "angela"), clients.WriteOpts{Ctx: ctx})
 		Expect(err).NotTo(HaveOccurred())
-		mesh1b, err := meshClient.Write(NewMesh(namespace2, "angela"), clients.WriteOpts{Ctx: ctx})
-		Expect(err).NotTo(HaveOccurred())
-
-		assertSnapshotMeshes(MeshList{mesh1a, mesh1b}, nil)
-
-		mesh2a, err := meshClient.Write(NewMesh(namespace1, "bob"), clients.WriteOpts{Ctx: ctx})
-		Expect(err).NotTo(HaveOccurred())
-		mesh2b, err := meshClient.Write(NewMesh(namespace2, "bob"), clients.WriteOpts{Ctx: ctx})
+		secret1b, err := secretClient.Write(gloo_solo_io.NewSecret(namespace2, "angela"), clients.WriteOpts{Ctx: ctx})
 		Expect(err).NotTo(HaveOccurred())
 
-		assertSnapshotMeshes(MeshList{mesh1a, mesh1b, mesh2a, mesh2b}, nil)
+		assertSnapshotSecrets(gloo_solo_io.SecretList{secret1a, secret1b}, nil)
 
-		err = meshClient.Delete(mesh2a.Metadata.Namespace, mesh2a.Metadata.Name, clients.DeleteOpts{Ctx: ctx})
+		secret2a, err := secretClient.Write(gloo_solo_io.NewSecret(namespace1, "bob"), clients.WriteOpts{Ctx: ctx})
 		Expect(err).NotTo(HaveOccurred())
-		err = meshClient.Delete(mesh2b.Metadata.Namespace, mesh2b.Metadata.Name, clients.DeleteOpts{Ctx: ctx})
-		Expect(err).NotTo(HaveOccurred())
-
-		assertSnapshotMeshes(MeshList{mesh1a, mesh1b}, MeshList{mesh2a, mesh2b})
-
-		err = meshClient.Delete(mesh1a.Metadata.Namespace, mesh1a.Metadata.Name, clients.DeleteOpts{Ctx: ctx})
-		Expect(err).NotTo(HaveOccurred())
-		err = meshClient.Delete(mesh1b.Metadata.Namespace, mesh1b.Metadata.Name, clients.DeleteOpts{Ctx: ctx})
+		secret2b, err := secretClient.Write(gloo_solo_io.NewSecret(namespace2, "bob"), clients.WriteOpts{Ctx: ctx})
 		Expect(err).NotTo(HaveOccurred())
 
-		assertSnapshotMeshes(nil, MeshList{mesh1a, mesh1b, mesh2a, mesh2b})
+		assertSnapshotSecrets(gloo_solo_io.SecretList{secret1a, secret1b, secret2a, secret2b}, nil)
 
-		/*
-			RoutingRule
-		*/
-
-		assertSnapshotRoutingrules := func(expectRoutingrules RoutingRuleList, unexpectRoutingrules RoutingRuleList) {
-		drain:
-			for {
-				select {
-				case snap = <-snapshots:
-					for _, expected := range expectRoutingrules {
-						if _, err := snap.Routingrules.List().Find(expected.Metadata.Ref().Strings()); err != nil {
-							continue drain
-						}
-					}
-					for _, unexpected := range unexpectRoutingrules {
-						if _, err := snap.Routingrules.List().Find(unexpected.Metadata.Ref().Strings()); err == nil {
-							continue drain
-						}
-					}
-					break drain
-				case err := <-errs:
-					Expect(err).NotTo(HaveOccurred())
-				case <-time.After(time.Second * 10):
-					nsList1, _ := routingRuleClient.List(namespace1, clients.ListOpts{})
-					nsList2, _ := routingRuleClient.List(namespace2, clients.ListOpts{})
-					combined := nsList1.ByNamespace()
-					combined.Add(nsList2...)
-					Fail("expected final snapshot before 10 seconds. expected " + log.Sprintf("%v", combined))
-				}
-			}
-		}
-
-		routingRule1a, err := routingRuleClient.Write(NewRoutingRule(namespace1, "angela"), clients.WriteOpts{Ctx: ctx})
+		err = secretClient.Delete(secret2a.Metadata.Namespace, secret2a.Metadata.Name, clients.DeleteOpts{Ctx: ctx})
 		Expect(err).NotTo(HaveOccurred())
-		routingRule1b, err := routingRuleClient.Write(NewRoutingRule(namespace2, "angela"), clients.WriteOpts{Ctx: ctx})
+		err = secretClient.Delete(secret2b.Metadata.Namespace, secret2b.Metadata.Name, clients.DeleteOpts{Ctx: ctx})
 		Expect(err).NotTo(HaveOccurred())
 
-		assertSnapshotRoutingrules(RoutingRuleList{routingRule1a, routingRule1b}, nil)
+		assertSnapshotSecrets(gloo_solo_io.SecretList{secret1a, secret1b}, gloo_solo_io.SecretList{secret2a, secret2b})
 
-		routingRule2a, err := routingRuleClient.Write(NewRoutingRule(namespace1, "bob"), clients.WriteOpts{Ctx: ctx})
+		err = secretClient.Delete(secret1a.Metadata.Namespace, secret1a.Metadata.Name, clients.DeleteOpts{Ctx: ctx})
 		Expect(err).NotTo(HaveOccurred())
-		routingRule2b, err := routingRuleClient.Write(NewRoutingRule(namespace2, "bob"), clients.WriteOpts{Ctx: ctx})
-		Expect(err).NotTo(HaveOccurred())
-
-		assertSnapshotRoutingrules(RoutingRuleList{routingRule1a, routingRule1b, routingRule2a, routingRule2b}, nil)
-
-		err = routingRuleClient.Delete(routingRule2a.Metadata.Namespace, routingRule2a.Metadata.Name, clients.DeleteOpts{Ctx: ctx})
-		Expect(err).NotTo(HaveOccurred())
-		err = routingRuleClient.Delete(routingRule2b.Metadata.Namespace, routingRule2b.Metadata.Name, clients.DeleteOpts{Ctx: ctx})
+		err = secretClient.Delete(secret1b.Metadata.Namespace, secret1b.Metadata.Name, clients.DeleteOpts{Ctx: ctx})
 		Expect(err).NotTo(HaveOccurred())
 
-		assertSnapshotRoutingrules(RoutingRuleList{routingRule1a, routingRule1b}, RoutingRuleList{routingRule2a, routingRule2b})
-
-		err = routingRuleClient.Delete(routingRule1a.Metadata.Namespace, routingRule1a.Metadata.Name, clients.DeleteOpts{Ctx: ctx})
-		Expect(err).NotTo(HaveOccurred())
-		err = routingRuleClient.Delete(routingRule1b.Metadata.Namespace, routingRule1b.Metadata.Name, clients.DeleteOpts{Ctx: ctx})
-		Expect(err).NotTo(HaveOccurred())
-
-		assertSnapshotRoutingrules(nil, RoutingRuleList{routingRule1a, routingRule1b, routingRule2a, routingRule2b})
+		assertSnapshotSecrets(nil, gloo_solo_io.SecretList{secret1a, secret1b, secret2a, secret2b})
 
 		/*
 			Upstream
@@ -355,21 +295,21 @@ var _ = Describe("V1Emitter", func() {
 		assertSnapshotIstiocerts(nil, encryption_istio_io.IstioCacertsSecretList{istioCacertsSecret1a, istioCacertsSecret1b, istioCacertsSecret2a, istioCacertsSecret2b})
 
 		/*
-			Secret
+			Mesh
 		*/
 
-		assertSnapshotSecrets := func(expectSecrets gloo_solo_io.SecretList, unexpectSecrets gloo_solo_io.SecretList) {
+		assertSnapshotMeshes := func(expectMeshes MeshList, unexpectMeshes MeshList) {
 		drain:
 			for {
 				select {
 				case snap = <-snapshots:
-					for _, expected := range expectSecrets {
-						if _, err := snap.Secrets.List().Find(expected.Metadata.Ref().Strings()); err != nil {
+					for _, expected := range expectMeshes {
+						if _, err := snap.Meshes.List().Find(expected.Metadata.Ref().Strings()); err != nil {
 							continue drain
 						}
 					}
-					for _, unexpected := range unexpectSecrets {
-						if _, err := snap.Secrets.List().Find(unexpected.Metadata.Ref().Strings()); err == nil {
+					for _, unexpected := range unexpectMeshes {
+						if _, err := snap.Meshes.List().Find(unexpected.Metadata.Ref().Strings()); err == nil {
 							continue drain
 						}
 					}
@@ -377,8 +317,8 @@ var _ = Describe("V1Emitter", func() {
 				case err := <-errs:
 					Expect(err).NotTo(HaveOccurred())
 				case <-time.After(time.Second * 10):
-					nsList1, _ := secretClient.List(namespace1, clients.ListOpts{})
-					nsList2, _ := secretClient.List(namespace2, clients.ListOpts{})
+					nsList1, _ := meshClient.List(namespace1, clients.ListOpts{})
+					nsList2, _ := meshClient.List(namespace2, clients.ListOpts{})
 					combined := nsList1.ByNamespace()
 					combined.Add(nsList2...)
 					Fail("expected final snapshot before 10 seconds. expected " + log.Sprintf("%v", combined))
@@ -386,32 +326,92 @@ var _ = Describe("V1Emitter", func() {
 			}
 		}
 
-		secret1a, err := secretClient.Write(gloo_solo_io.NewSecret(namespace1, "angela"), clients.WriteOpts{Ctx: ctx})
+		mesh1a, err := meshClient.Write(NewMesh(namespace1, "angela"), clients.WriteOpts{Ctx: ctx})
 		Expect(err).NotTo(HaveOccurred())
-		secret1b, err := secretClient.Write(gloo_solo_io.NewSecret(namespace2, "angela"), clients.WriteOpts{Ctx: ctx})
-		Expect(err).NotTo(HaveOccurred())
-
-		assertSnapshotSecrets(gloo_solo_io.SecretList{secret1a, secret1b}, nil)
-
-		secret2a, err := secretClient.Write(gloo_solo_io.NewSecret(namespace1, "bob"), clients.WriteOpts{Ctx: ctx})
-		Expect(err).NotTo(HaveOccurred())
-		secret2b, err := secretClient.Write(gloo_solo_io.NewSecret(namespace2, "bob"), clients.WriteOpts{Ctx: ctx})
+		mesh1b, err := meshClient.Write(NewMesh(namespace2, "angela"), clients.WriteOpts{Ctx: ctx})
 		Expect(err).NotTo(HaveOccurred())
 
-		assertSnapshotSecrets(gloo_solo_io.SecretList{secret1a, secret1b, secret2a, secret2b}, nil)
+		assertSnapshotMeshes(MeshList{mesh1a, mesh1b}, nil)
 
-		err = secretClient.Delete(secret2a.Metadata.Namespace, secret2a.Metadata.Name, clients.DeleteOpts{Ctx: ctx})
+		mesh2a, err := meshClient.Write(NewMesh(namespace1, "bob"), clients.WriteOpts{Ctx: ctx})
 		Expect(err).NotTo(HaveOccurred())
-		err = secretClient.Delete(secret2b.Metadata.Namespace, secret2b.Metadata.Name, clients.DeleteOpts{Ctx: ctx})
-		Expect(err).NotTo(HaveOccurred())
-
-		assertSnapshotSecrets(gloo_solo_io.SecretList{secret1a, secret1b}, gloo_solo_io.SecretList{secret2a, secret2b})
-
-		err = secretClient.Delete(secret1a.Metadata.Namespace, secret1a.Metadata.Name, clients.DeleteOpts{Ctx: ctx})
-		Expect(err).NotTo(HaveOccurred())
-		err = secretClient.Delete(secret1b.Metadata.Namespace, secret1b.Metadata.Name, clients.DeleteOpts{Ctx: ctx})
+		mesh2b, err := meshClient.Write(NewMesh(namespace2, "bob"), clients.WriteOpts{Ctx: ctx})
 		Expect(err).NotTo(HaveOccurred())
 
-		assertSnapshotSecrets(nil, gloo_solo_io.SecretList{secret1a, secret1b, secret2a, secret2b})
+		assertSnapshotMeshes(MeshList{mesh1a, mesh1b, mesh2a, mesh2b}, nil)
+
+		err = meshClient.Delete(mesh2a.Metadata.Namespace, mesh2a.Metadata.Name, clients.DeleteOpts{Ctx: ctx})
+		Expect(err).NotTo(HaveOccurred())
+		err = meshClient.Delete(mesh2b.Metadata.Namespace, mesh2b.Metadata.Name, clients.DeleteOpts{Ctx: ctx})
+		Expect(err).NotTo(HaveOccurred())
+
+		assertSnapshotMeshes(MeshList{mesh1a, mesh1b}, MeshList{mesh2a, mesh2b})
+
+		err = meshClient.Delete(mesh1a.Metadata.Namespace, mesh1a.Metadata.Name, clients.DeleteOpts{Ctx: ctx})
+		Expect(err).NotTo(HaveOccurred())
+		err = meshClient.Delete(mesh1b.Metadata.Namespace, mesh1b.Metadata.Name, clients.DeleteOpts{Ctx: ctx})
+		Expect(err).NotTo(HaveOccurred())
+
+		assertSnapshotMeshes(nil, MeshList{mesh1a, mesh1b, mesh2a, mesh2b})
+
+		/*
+			RoutingRule
+		*/
+
+		assertSnapshotRoutingrules := func(expectRoutingrules RoutingRuleList, unexpectRoutingrules RoutingRuleList) {
+		drain:
+			for {
+				select {
+				case snap = <-snapshots:
+					for _, expected := range expectRoutingrules {
+						if _, err := snap.Routingrules.List().Find(expected.Metadata.Ref().Strings()); err != nil {
+							continue drain
+						}
+					}
+					for _, unexpected := range unexpectRoutingrules {
+						if _, err := snap.Routingrules.List().Find(unexpected.Metadata.Ref().Strings()); err == nil {
+							continue drain
+						}
+					}
+					break drain
+				case err := <-errs:
+					Expect(err).NotTo(HaveOccurred())
+				case <-time.After(time.Second * 10):
+					nsList1, _ := routingRuleClient.List(namespace1, clients.ListOpts{})
+					nsList2, _ := routingRuleClient.List(namespace2, clients.ListOpts{})
+					combined := nsList1.ByNamespace()
+					combined.Add(nsList2...)
+					Fail("expected final snapshot before 10 seconds. expected " + log.Sprintf("%v", combined))
+				}
+			}
+		}
+
+		routingRule1a, err := routingRuleClient.Write(NewRoutingRule(namespace1, "angela"), clients.WriteOpts{Ctx: ctx})
+		Expect(err).NotTo(HaveOccurred())
+		routingRule1b, err := routingRuleClient.Write(NewRoutingRule(namespace2, "angela"), clients.WriteOpts{Ctx: ctx})
+		Expect(err).NotTo(HaveOccurred())
+
+		assertSnapshotRoutingrules(RoutingRuleList{routingRule1a, routingRule1b}, nil)
+
+		routingRule2a, err := routingRuleClient.Write(NewRoutingRule(namespace1, "bob"), clients.WriteOpts{Ctx: ctx})
+		Expect(err).NotTo(HaveOccurred())
+		routingRule2b, err := routingRuleClient.Write(NewRoutingRule(namespace2, "bob"), clients.WriteOpts{Ctx: ctx})
+		Expect(err).NotTo(HaveOccurred())
+
+		assertSnapshotRoutingrules(RoutingRuleList{routingRule1a, routingRule1b, routingRule2a, routingRule2b}, nil)
+
+		err = routingRuleClient.Delete(routingRule2a.Metadata.Namespace, routingRule2a.Metadata.Name, clients.DeleteOpts{Ctx: ctx})
+		Expect(err).NotTo(HaveOccurred())
+		err = routingRuleClient.Delete(routingRule2b.Metadata.Namespace, routingRule2b.Metadata.Name, clients.DeleteOpts{Ctx: ctx})
+		Expect(err).NotTo(HaveOccurred())
+
+		assertSnapshotRoutingrules(RoutingRuleList{routingRule1a, routingRule1b}, RoutingRuleList{routingRule2a, routingRule2b})
+
+		err = routingRuleClient.Delete(routingRule1a.Metadata.Namespace, routingRule1a.Metadata.Name, clients.DeleteOpts{Ctx: ctx})
+		Expect(err).NotTo(HaveOccurred())
+		err = routingRuleClient.Delete(routingRule1b.Metadata.Namespace, routingRule1b.Metadata.Name, clients.DeleteOpts{Ctx: ctx})
+		Expect(err).NotTo(HaveOccurred())
+
+		assertSnapshotRoutingrules(nil, RoutingRuleList{routingRule1a, routingRule1b, routingRule2a, routingRule2b})
 	})
 })

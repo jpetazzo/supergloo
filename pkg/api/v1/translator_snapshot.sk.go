@@ -13,36 +13,29 @@ import (
 )
 
 type TranslatorSnapshot struct {
-	Meshes       MeshesByNamespace
-	Routingrules RoutingrulesByNamespace
+	Secrets      gloo_solo_io.SecretsByNamespace
 	Upstreams    gloo_solo_io.UpstreamsByNamespace
 	Istiocerts   encryption_istio_io.IstiocertsByNamespace
-	Secrets      gloo_solo_io.SecretsByNamespace
+	Meshes       MeshesByNamespace
+	Routingrules RoutingrulesByNamespace
 }
 
 func (s TranslatorSnapshot) Clone() TranslatorSnapshot {
 	return TranslatorSnapshot{
-		Meshes:       s.Meshes.Clone(),
-		Routingrules: s.Routingrules.Clone(),
+		Secrets:      s.Secrets.Clone(),
 		Upstreams:    s.Upstreams.Clone(),
 		Istiocerts:   s.Istiocerts.Clone(),
-		Secrets:      s.Secrets.Clone(),
+		Meshes:       s.Meshes.Clone(),
+		Routingrules: s.Routingrules.Clone(),
 	}
 }
 
 func (s TranslatorSnapshot) snapshotToHash() TranslatorSnapshot {
 	snapshotForHashing := s.Clone()
-	for _, mesh := range snapshotForHashing.Meshes.List() {
-		resources.UpdateMetadata(mesh, func(meta *core.Metadata) {
+	for _, secret := range snapshotForHashing.Secrets.List() {
+		resources.UpdateMetadata(secret, func(meta *core.Metadata) {
 			meta.ResourceVersion = ""
 		})
-		mesh.SetStatus(core.Status{})
-	}
-	for _, routingRule := range snapshotForHashing.Routingrules.List() {
-		resources.UpdateMetadata(routingRule, func(meta *core.Metadata) {
-			meta.ResourceVersion = ""
-		})
-		routingRule.SetStatus(core.Status{})
 	}
 	for _, upstream := range snapshotForHashing.Upstreams.List() {
 		resources.UpdateMetadata(upstream, func(meta *core.Metadata) {
@@ -55,10 +48,17 @@ func (s TranslatorSnapshot) snapshotToHash() TranslatorSnapshot {
 			meta.ResourceVersion = ""
 		})
 	}
-	for _, secret := range snapshotForHashing.Secrets.List() {
-		resources.UpdateMetadata(secret, func(meta *core.Metadata) {
+	for _, mesh := range snapshotForHashing.Meshes.List() {
+		resources.UpdateMetadata(mesh, func(meta *core.Metadata) {
 			meta.ResourceVersion = ""
 		})
+		mesh.SetStatus(core.Status{})
+	}
+	for _, routingRule := range snapshotForHashing.Routingrules.List() {
+		resources.UpdateMetadata(routingRule, func(meta *core.Metadata) {
+			meta.ResourceVersion = ""
+		})
+		routingRule.SetStatus(core.Status{})
 	}
 
 	return snapshotForHashing
@@ -71,16 +71,16 @@ func (s TranslatorSnapshot) Hash() uint64 {
 func (s TranslatorSnapshot) HashFields() []zap.Field {
 	snapshotForHashing := s.snapshotToHash()
 	var fields []zap.Field
-	meshes := s.hashStruct(snapshotForHashing.Meshes.List())
-	fields = append(fields, zap.Uint64("meshes", meshes))
-	routingrules := s.hashStruct(snapshotForHashing.Routingrules.List())
-	fields = append(fields, zap.Uint64("routingrules", routingrules))
+	secrets := s.hashStruct(snapshotForHashing.Secrets.List())
+	fields = append(fields, zap.Uint64("secrets", secrets))
 	upstreams := s.hashStruct(snapshotForHashing.Upstreams.List())
 	fields = append(fields, zap.Uint64("upstreams", upstreams))
 	istiocerts := s.hashStruct(snapshotForHashing.Istiocerts.List())
 	fields = append(fields, zap.Uint64("istiocerts", istiocerts))
-	secrets := s.hashStruct(snapshotForHashing.Secrets.List())
-	fields = append(fields, zap.Uint64("secrets", secrets))
+	meshes := s.hashStruct(snapshotForHashing.Meshes.List())
+	fields = append(fields, zap.Uint64("meshes", meshes))
+	routingrules := s.hashStruct(snapshotForHashing.Routingrules.List())
+	fields = append(fields, zap.Uint64("routingrules", routingrules))
 
 	return append(fields, zap.Uint64("snapshotHash", s.hashStruct(snapshotForHashing)))
 }

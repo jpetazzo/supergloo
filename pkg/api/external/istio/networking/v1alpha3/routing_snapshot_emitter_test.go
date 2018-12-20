@@ -30,8 +30,8 @@ var _ = Describe("V1Alpha3Emitter", func() {
 		namespace2            string
 		cfg                   *rest.Config
 		emitter               RoutingEmitter
-		destinationRuleClient DestinationRuleClient
 		virtualServiceClient  VirtualServiceClient
+		destinationRuleClient DestinationRuleClient
 	)
 
 	BeforeEach(func() {
@@ -45,14 +45,6 @@ var _ = Describe("V1Alpha3Emitter", func() {
 		Expect(err).NotTo(HaveOccurred())
 
 		cache := kuberc.NewKubeCache()
-		// DestinationRule Constructor
-		destinationRuleClientFactory := &factory.KubeResourceClientFactory{
-			Crd:         DestinationRuleCrd,
-			Cfg:         cfg,
-			SharedCache: cache,
-		}
-		destinationRuleClient, err = NewDestinationRuleClient(destinationRuleClientFactory)
-		Expect(err).NotTo(HaveOccurred())
 		// VirtualService Constructor
 		virtualServiceClientFactory := &factory.KubeResourceClientFactory{
 			Crd:         VirtualServiceCrd,
@@ -61,7 +53,15 @@ var _ = Describe("V1Alpha3Emitter", func() {
 		}
 		virtualServiceClient, err = NewVirtualServiceClient(virtualServiceClientFactory)
 		Expect(err).NotTo(HaveOccurred())
-		emitter = NewRoutingEmitter(destinationRuleClient, virtualServiceClient)
+		// DestinationRule Constructor
+		destinationRuleClientFactory := &factory.KubeResourceClientFactory{
+			Crd:         DestinationRuleCrd,
+			Cfg:         cfg,
+			SharedCache: cache,
+		}
+		destinationRuleClient, err = NewDestinationRuleClient(destinationRuleClientFactory)
+		Expect(err).NotTo(HaveOccurred())
+		emitter = NewRoutingEmitter(virtualServiceClient, destinationRuleClient)
 	})
 	AfterEach(func() {
 		setup.TeardownKube(namespace1)
@@ -79,66 +79,6 @@ var _ = Describe("V1Alpha3Emitter", func() {
 		Expect(err).NotTo(HaveOccurred())
 
 		var snap *RoutingSnapshot
-
-		/*
-			DestinationRule
-		*/
-
-		assertSnapshotDestinationrules := func(expectDestinationrules DestinationRuleList, unexpectDestinationrules DestinationRuleList) {
-		drain:
-			for {
-				select {
-				case snap = <-snapshots:
-					for _, expected := range expectDestinationrules {
-						if _, err := snap.Destinationrules.List().Find(expected.Metadata.Ref().Strings()); err != nil {
-							continue drain
-						}
-					}
-					for _, unexpected := range unexpectDestinationrules {
-						if _, err := snap.Destinationrules.List().Find(unexpected.Metadata.Ref().Strings()); err == nil {
-							continue drain
-						}
-					}
-					break drain
-				case err := <-errs:
-					Expect(err).NotTo(HaveOccurred())
-				case <-time.After(time.Second * 10):
-					nsList1, _ := destinationRuleClient.List(namespace1, clients.ListOpts{})
-					nsList2, _ := destinationRuleClient.List(namespace2, clients.ListOpts{})
-					combined := nsList1.ByNamespace()
-					combined.Add(nsList2...)
-					Fail("expected final snapshot before 10 seconds. expected " + log.Sprintf("%v", combined))
-				}
-			}
-		}
-
-		destinationRule1a, err := destinationRuleClient.Write(NewDestinationRule(namespace1, "angela"), clients.WriteOpts{Ctx: ctx})
-		Expect(err).NotTo(HaveOccurred())
-		destinationRule1b, err := destinationRuleClient.Write(NewDestinationRule(namespace2, "angela"), clients.WriteOpts{Ctx: ctx})
-		Expect(err).NotTo(HaveOccurred())
-
-		assertSnapshotDestinationrules(DestinationRuleList{destinationRule1a, destinationRule1b}, nil)
-
-		destinationRule2a, err := destinationRuleClient.Write(NewDestinationRule(namespace1, "bob"), clients.WriteOpts{Ctx: ctx})
-		Expect(err).NotTo(HaveOccurred())
-		destinationRule2b, err := destinationRuleClient.Write(NewDestinationRule(namespace2, "bob"), clients.WriteOpts{Ctx: ctx})
-		Expect(err).NotTo(HaveOccurred())
-
-		assertSnapshotDestinationrules(DestinationRuleList{destinationRule1a, destinationRule1b, destinationRule2a, destinationRule2b}, nil)
-
-		err = destinationRuleClient.Delete(destinationRule2a.Metadata.Namespace, destinationRule2a.Metadata.Name, clients.DeleteOpts{Ctx: ctx})
-		Expect(err).NotTo(HaveOccurred())
-		err = destinationRuleClient.Delete(destinationRule2b.Metadata.Namespace, destinationRule2b.Metadata.Name, clients.DeleteOpts{Ctx: ctx})
-		Expect(err).NotTo(HaveOccurred())
-
-		assertSnapshotDestinationrules(DestinationRuleList{destinationRule1a, destinationRule1b}, DestinationRuleList{destinationRule2a, destinationRule2b})
-
-		err = destinationRuleClient.Delete(destinationRule1a.Metadata.Namespace, destinationRule1a.Metadata.Name, clients.DeleteOpts{Ctx: ctx})
-		Expect(err).NotTo(HaveOccurred())
-		err = destinationRuleClient.Delete(destinationRule1b.Metadata.Namespace, destinationRule1b.Metadata.Name, clients.DeleteOpts{Ctx: ctx})
-		Expect(err).NotTo(HaveOccurred())
-
-		assertSnapshotDestinationrules(nil, DestinationRuleList{destinationRule1a, destinationRule1b, destinationRule2a, destinationRule2b})
 
 		/*
 			VirtualService
@@ -199,5 +139,65 @@ var _ = Describe("V1Alpha3Emitter", func() {
 		Expect(err).NotTo(HaveOccurred())
 
 		assertSnapshotVirtualservices(nil, VirtualServiceList{virtualService1a, virtualService1b, virtualService2a, virtualService2b})
+
+		/*
+			DestinationRule
+		*/
+
+		assertSnapshotDestinationrules := func(expectDestinationrules DestinationRuleList, unexpectDestinationrules DestinationRuleList) {
+		drain:
+			for {
+				select {
+				case snap = <-snapshots:
+					for _, expected := range expectDestinationrules {
+						if _, err := snap.Destinationrules.List().Find(expected.Metadata.Ref().Strings()); err != nil {
+							continue drain
+						}
+					}
+					for _, unexpected := range unexpectDestinationrules {
+						if _, err := snap.Destinationrules.List().Find(unexpected.Metadata.Ref().Strings()); err == nil {
+							continue drain
+						}
+					}
+					break drain
+				case err := <-errs:
+					Expect(err).NotTo(HaveOccurred())
+				case <-time.After(time.Second * 10):
+					nsList1, _ := destinationRuleClient.List(namespace1, clients.ListOpts{})
+					nsList2, _ := destinationRuleClient.List(namespace2, clients.ListOpts{})
+					combined := nsList1.ByNamespace()
+					combined.Add(nsList2...)
+					Fail("expected final snapshot before 10 seconds. expected " + log.Sprintf("%v", combined))
+				}
+			}
+		}
+
+		destinationRule1a, err := destinationRuleClient.Write(NewDestinationRule(namespace1, "angela"), clients.WriteOpts{Ctx: ctx})
+		Expect(err).NotTo(HaveOccurred())
+		destinationRule1b, err := destinationRuleClient.Write(NewDestinationRule(namespace2, "angela"), clients.WriteOpts{Ctx: ctx})
+		Expect(err).NotTo(HaveOccurred())
+
+		assertSnapshotDestinationrules(DestinationRuleList{destinationRule1a, destinationRule1b}, nil)
+
+		destinationRule2a, err := destinationRuleClient.Write(NewDestinationRule(namespace1, "bob"), clients.WriteOpts{Ctx: ctx})
+		Expect(err).NotTo(HaveOccurred())
+		destinationRule2b, err := destinationRuleClient.Write(NewDestinationRule(namespace2, "bob"), clients.WriteOpts{Ctx: ctx})
+		Expect(err).NotTo(HaveOccurred())
+
+		assertSnapshotDestinationrules(DestinationRuleList{destinationRule1a, destinationRule1b, destinationRule2a, destinationRule2b}, nil)
+
+		err = destinationRuleClient.Delete(destinationRule2a.Metadata.Namespace, destinationRule2a.Metadata.Name, clients.DeleteOpts{Ctx: ctx})
+		Expect(err).NotTo(HaveOccurred())
+		err = destinationRuleClient.Delete(destinationRule2b.Metadata.Namespace, destinationRule2b.Metadata.Name, clients.DeleteOpts{Ctx: ctx})
+		Expect(err).NotTo(HaveOccurred())
+
+		assertSnapshotDestinationrules(DestinationRuleList{destinationRule1a, destinationRule1b}, DestinationRuleList{destinationRule2a, destinationRule2b})
+
+		err = destinationRuleClient.Delete(destinationRule1a.Metadata.Namespace, destinationRule1a.Metadata.Name, clients.DeleteOpts{Ctx: ctx})
+		Expect(err).NotTo(HaveOccurred())
+		err = destinationRuleClient.Delete(destinationRule1b.Metadata.Namespace, destinationRule1b.Metadata.Name, clients.DeleteOpts{Ctx: ctx})
+		Expect(err).NotTo(HaveOccurred())
+
+		assertSnapshotDestinationrules(nil, DestinationRuleList{destinationRule1a, destinationRule1b, destinationRule2a, destinationRule2b})
 	})
 })

@@ -4,6 +4,7 @@ package v1
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	gloo_solo_io "github.com/solo-io/supergloo/pkg/api/external/gloo/v1"
@@ -25,16 +26,10 @@ var _ = Describe("TranslatorEventLoop", func() {
 
 	BeforeEach(func() {
 
-		meshClientFactory := &factory.MemoryResourceClientFactory{
+		secretClientFactory := &factory.MemoryResourceClientFactory{
 			Cache: memory.NewInMemoryResourceCache(),
 		}
-		meshClient, err := NewMeshClient(meshClientFactory)
-		Expect(err).NotTo(HaveOccurred())
-
-		routingRuleClientFactory := &factory.MemoryResourceClientFactory{
-			Cache: memory.NewInMemoryResourceCache(),
-		}
-		routingRuleClient, err := NewRoutingRuleClient(routingRuleClientFactory)
+		secretClient, err := gloo_solo_io.NewSecretClient(secretClientFactory)
 		Expect(err).NotTo(HaveOccurred())
 
 		upstreamClientFactory := &factory.MemoryResourceClientFactory{
@@ -49,38 +44,53 @@ var _ = Describe("TranslatorEventLoop", func() {
 		istioCacertsSecretClient, err := encryption_istio_io.NewIstioCacertsSecretClient(istioCacertsSecretClientFactory)
 		Expect(err).NotTo(HaveOccurred())
 
-		secretClientFactory := &factory.MemoryResourceClientFactory{
+		meshClientFactory := &factory.MemoryResourceClientFactory{
 			Cache: memory.NewInMemoryResourceCache(),
 		}
-		secretClient, err := gloo_solo_io.NewSecretClient(secretClientFactory)
+		meshClient, err := NewMeshClient(meshClientFactory)
 		Expect(err).NotTo(HaveOccurred())
 
-		emitter = NewTranslatorEmitter(meshClient, routingRuleClient, upstreamClient, istioCacertsSecretClient, secretClient)
+		routingRuleClientFactory := &factory.MemoryResourceClientFactory{
+			Cache: memory.NewInMemoryResourceCache(),
+		}
+		routingRuleClient, err := NewRoutingRuleClient(routingRuleClientFactory)
+		Expect(err).NotTo(HaveOccurred())
+
+		emitter = NewTranslatorEmitter(secretClient, upstreamClient, istioCacertsSecretClient, meshClient, routingRuleClient)
 	})
 	It("runs sync function on a new snapshot", func() {
-		_, err = emitter.Mesh().Write(NewMesh(namespace, "jerry"), clients.WriteOpts{})
-		Expect(err).NotTo(HaveOccurred())
-		_, err = emitter.RoutingRule().Write(NewRoutingRule(namespace, "jerry"), clients.WriteOpts{})
+		_, err = emitter.Secret().Write(gloo_solo_io.NewSecret(namespace, "jerry"), clients.WriteOpts{})
 		Expect(err).NotTo(HaveOccurred())
 		_, err = emitter.Upstream().Write(gloo_solo_io.NewUpstream(namespace, "jerry"), clients.WriteOpts{})
 		Expect(err).NotTo(HaveOccurred())
 		_, err = emitter.IstioCacertsSecret().Write(encryption_istio_io.NewIstioCacertsSecret(namespace, "jerry"), clients.WriteOpts{})
 		Expect(err).NotTo(HaveOccurred())
-		_, err = emitter.Secret().Write(gloo_solo_io.NewSecret(namespace, "jerry"), clients.WriteOpts{})
+		_, err = emitter.Mesh().Write(NewMesh(namespace, "jerry"), clients.WriteOpts{})
+		Expect(err).NotTo(HaveOccurred())
+		_, err = emitter.RoutingRule().Write(NewRoutingRule(namespace, "jerry"), clients.WriteOpts{})
 		Expect(err).NotTo(HaveOccurred())
 		sync := &mockTranslatorSyncer{}
 		el := NewTranslatorEventLoop(emitter, sync)
 		_, err := el.Run([]string{namespace}, clients.WatchOpts{})
 		Expect(err).NotTo(HaveOccurred())
-		Eventually(func() bool { return sync.synced }, time.Second).Should(BeTrue())
+		Eventually(sync.Synced, 5*time.Second).Should(BeTrue())
 	})
 })
 
 type mockTranslatorSyncer struct {
 	synced bool
+	mutex  sync.Mutex
+}
+
+func (s *mockTranslatorSyncer) Synced() bool {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	return s.synced
 }
 
 func (s *mockTranslatorSyncer) Sync(ctx context.Context, snap *TranslatorSnapshot) error {
+	s.mutex.Lock()
 	s.synced = true
+	s.mutex.Unlock()
 	return nil
 }

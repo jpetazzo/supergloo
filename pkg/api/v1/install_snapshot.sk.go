@@ -12,29 +12,29 @@ import (
 )
 
 type InstallSnapshot struct {
-	Installs   InstallsByNamespace
 	Istiocerts encryption_istio_io.IstiocertsByNamespace
+	Installs   InstallsByNamespace
 }
 
 func (s InstallSnapshot) Clone() InstallSnapshot {
 	return InstallSnapshot{
-		Installs:   s.Installs.Clone(),
 		Istiocerts: s.Istiocerts.Clone(),
+		Installs:   s.Installs.Clone(),
 	}
 }
 
 func (s InstallSnapshot) snapshotToHash() InstallSnapshot {
 	snapshotForHashing := s.Clone()
+	for _, istioCacertsSecret := range snapshotForHashing.Istiocerts.List() {
+		resources.UpdateMetadata(istioCacertsSecret, func(meta *core.Metadata) {
+			meta.ResourceVersion = ""
+		})
+	}
 	for _, install := range snapshotForHashing.Installs.List() {
 		resources.UpdateMetadata(install, func(meta *core.Metadata) {
 			meta.ResourceVersion = ""
 		})
 		install.SetStatus(core.Status{})
-	}
-	for _, istioCacertsSecret := range snapshotForHashing.Istiocerts.List() {
-		resources.UpdateMetadata(istioCacertsSecret, func(meta *core.Metadata) {
-			meta.ResourceVersion = ""
-		})
 	}
 
 	return snapshotForHashing
@@ -47,10 +47,10 @@ func (s InstallSnapshot) Hash() uint64 {
 func (s InstallSnapshot) HashFields() []zap.Field {
 	snapshotForHashing := s.snapshotToHash()
 	var fields []zap.Field
-	installs := s.hashStruct(snapshotForHashing.Installs.List())
-	fields = append(fields, zap.Uint64("installs", installs))
 	istiocerts := s.hashStruct(snapshotForHashing.Istiocerts.List())
 	fields = append(fields, zap.Uint64("istiocerts", istiocerts))
+	installs := s.hashStruct(snapshotForHashing.Installs.List())
+	fields = append(fields, zap.Uint64("installs", installs))
 
 	return append(fields, zap.Uint64("snapshotHash", s.hashStruct(snapshotForHashing)))
 }

@@ -44,43 +44,40 @@ func init() {
 
 type TranslatorEmitter interface {
 	Register() error
-	Mesh() MeshClient
-	RoutingRule() RoutingRuleClient
+	Secret() gloo_solo_io.SecretClient
 	Upstream() gloo_solo_io.UpstreamClient
 	IstioCacertsSecret() encryption_istio_io.IstioCacertsSecretClient
-	Secret() gloo_solo_io.SecretClient
+	Mesh() MeshClient
+	RoutingRule() RoutingRuleClient
 	Snapshots(watchNamespaces []string, opts clients.WatchOpts) (<-chan *TranslatorSnapshot, <-chan error, error)
 }
 
-func NewTranslatorEmitter(meshClient MeshClient, routingRuleClient RoutingRuleClient, upstreamClient gloo_solo_io.UpstreamClient, istioCacertsSecretClient encryption_istio_io.IstioCacertsSecretClient, secretClient gloo_solo_io.SecretClient) TranslatorEmitter {
-	return NewTranslatorEmitterWithEmit(meshClient, routingRuleClient, upstreamClient, istioCacertsSecretClient, secretClient, make(chan struct{}))
+func NewTranslatorEmitter(secretClient gloo_solo_io.SecretClient, upstreamClient gloo_solo_io.UpstreamClient, istioCacertsSecretClient encryption_istio_io.IstioCacertsSecretClient, meshClient MeshClient, routingRuleClient RoutingRuleClient) TranslatorEmitter {
+	return NewTranslatorEmitterWithEmit(secretClient, upstreamClient, istioCacertsSecretClient, meshClient, routingRuleClient, make(chan struct{}))
 }
 
-func NewTranslatorEmitterWithEmit(meshClient MeshClient, routingRuleClient RoutingRuleClient, upstreamClient gloo_solo_io.UpstreamClient, istioCacertsSecretClient encryption_istio_io.IstioCacertsSecretClient, secretClient gloo_solo_io.SecretClient, emit <-chan struct{}) TranslatorEmitter {
+func NewTranslatorEmitterWithEmit(secretClient gloo_solo_io.SecretClient, upstreamClient gloo_solo_io.UpstreamClient, istioCacertsSecretClient encryption_istio_io.IstioCacertsSecretClient, meshClient MeshClient, routingRuleClient RoutingRuleClient, emit <-chan struct{}) TranslatorEmitter {
 	return &translatorEmitter{
-		mesh:               meshClient,
-		routingRule:        routingRuleClient,
+		secret:             secretClient,
 		upstream:           upstreamClient,
 		istioCacertsSecret: istioCacertsSecretClient,
-		secret:             secretClient,
+		mesh:               meshClient,
+		routingRule:        routingRuleClient,
 		forceEmit:          emit,
 	}
 }
 
 type translatorEmitter struct {
 	forceEmit          <-chan struct{}
-	mesh               MeshClient
-	routingRule        RoutingRuleClient
+	secret             gloo_solo_io.SecretClient
 	upstream           gloo_solo_io.UpstreamClient
 	istioCacertsSecret encryption_istio_io.IstioCacertsSecretClient
-	secret             gloo_solo_io.SecretClient
+	mesh               MeshClient
+	routingRule        RoutingRuleClient
 }
 
 func (c *translatorEmitter) Register() error {
-	if err := c.mesh.Register(); err != nil {
-		return err
-	}
-	if err := c.routingRule.Register(); err != nil {
+	if err := c.secret.Register(); err != nil {
 		return err
 	}
 	if err := c.upstream.Register(); err != nil {
@@ -89,18 +86,17 @@ func (c *translatorEmitter) Register() error {
 	if err := c.istioCacertsSecret.Register(); err != nil {
 		return err
 	}
-	if err := c.secret.Register(); err != nil {
+	if err := c.mesh.Register(); err != nil {
+		return err
+	}
+	if err := c.routingRule.Register(); err != nil {
 		return err
 	}
 	return nil
 }
 
-func (c *translatorEmitter) Mesh() MeshClient {
-	return c.mesh
-}
-
-func (c *translatorEmitter) RoutingRule() RoutingRuleClient {
-	return c.routingRule
+func (c *translatorEmitter) Secret() gloo_solo_io.SecretClient {
+	return c.secret
 }
 
 func (c *translatorEmitter) Upstream() gloo_solo_io.UpstreamClient {
@@ -111,26 +107,24 @@ func (c *translatorEmitter) IstioCacertsSecret() encryption_istio_io.IstioCacert
 	return c.istioCacertsSecret
 }
 
-func (c *translatorEmitter) Secret() gloo_solo_io.SecretClient {
-	return c.secret
+func (c *translatorEmitter) Mesh() MeshClient {
+	return c.mesh
+}
+
+func (c *translatorEmitter) RoutingRule() RoutingRuleClient {
+	return c.routingRule
 }
 
 func (c *translatorEmitter) Snapshots(watchNamespaces []string, opts clients.WatchOpts) (<-chan *TranslatorSnapshot, <-chan error, error) {
 	errs := make(chan error)
 	var done sync.WaitGroup
 	ctx := opts.Ctx
-	/* Create channel for Mesh */
-	type meshListWithNamespace struct {
-		list      MeshList
+	/* Create channel for Secret */
+	type secretListWithNamespace struct {
+		list      gloo_solo_io.SecretList
 		namespace string
 	}
-	meshChan := make(chan meshListWithNamespace)
-	/* Create channel for RoutingRule */
-	type routingRuleListWithNamespace struct {
-		list      RoutingRuleList
-		namespace string
-	}
-	routingRuleChan := make(chan routingRuleListWithNamespace)
+	secretChan := make(chan secretListWithNamespace)
 	/* Create channel for Upstream */
 	type upstreamListWithNamespace struct {
 		list      gloo_solo_io.UpstreamList
@@ -143,35 +137,30 @@ func (c *translatorEmitter) Snapshots(watchNamespaces []string, opts clients.Wat
 		namespace string
 	}
 	istioCacertsSecretChan := make(chan istioCacertsSecretListWithNamespace)
-	/* Create channel for Secret */
-	type secretListWithNamespace struct {
-		list      gloo_solo_io.SecretList
+	/* Create channel for Mesh */
+	type meshListWithNamespace struct {
+		list      MeshList
 		namespace string
 	}
-	secretChan := make(chan secretListWithNamespace)
+	meshChan := make(chan meshListWithNamespace)
+	/* Create channel for RoutingRule */
+	type routingRuleListWithNamespace struct {
+		list      RoutingRuleList
+		namespace string
+	}
+	routingRuleChan := make(chan routingRuleListWithNamespace)
 
 	for _, namespace := range watchNamespaces {
-		/* Setup watch for Mesh */
-		meshNamespacesChan, meshErrs, err := c.mesh.Watch(namespace, opts)
+		/* Setup watch for Secret */
+		secretNamespacesChan, secretErrs, err := c.secret.Watch(namespace, opts)
 		if err != nil {
-			return nil, nil, errors.Wrapf(err, "starting Mesh watch")
+			return nil, nil, errors.Wrapf(err, "starting Secret watch")
 		}
 
 		done.Add(1)
 		go func(namespace string) {
 			defer done.Done()
-			errutils.AggregateErrs(ctx, errs, meshErrs, namespace+"-meshes")
-		}(namespace)
-		/* Setup watch for RoutingRule */
-		routingRuleNamespacesChan, routingRuleErrs, err := c.routingRule.Watch(namespace, opts)
-		if err != nil {
-			return nil, nil, errors.Wrapf(err, "starting RoutingRule watch")
-		}
-
-		done.Add(1)
-		go func(namespace string) {
-			defer done.Done()
-			errutils.AggregateErrs(ctx, errs, routingRuleErrs, namespace+"-routingrules")
+			errutils.AggregateErrs(ctx, errs, secretErrs, namespace+"-secrets")
 		}(namespace)
 		/* Setup watch for Upstream */
 		upstreamNamespacesChan, upstreamErrs, err := c.upstream.Watch(namespace, opts)
@@ -195,16 +184,27 @@ func (c *translatorEmitter) Snapshots(watchNamespaces []string, opts clients.Wat
 			defer done.Done()
 			errutils.AggregateErrs(ctx, errs, istioCacertsSecretErrs, namespace+"-istiocerts")
 		}(namespace)
-		/* Setup watch for Secret */
-		secretNamespacesChan, secretErrs, err := c.secret.Watch(namespace, opts)
+		/* Setup watch for Mesh */
+		meshNamespacesChan, meshErrs, err := c.mesh.Watch(namespace, opts)
 		if err != nil {
-			return nil, nil, errors.Wrapf(err, "starting Secret watch")
+			return nil, nil, errors.Wrapf(err, "starting Mesh watch")
 		}
 
 		done.Add(1)
 		go func(namespace string) {
 			defer done.Done()
-			errutils.AggregateErrs(ctx, errs, secretErrs, namespace+"-secrets")
+			errutils.AggregateErrs(ctx, errs, meshErrs, namespace+"-meshes")
+		}(namespace)
+		/* Setup watch for RoutingRule */
+		routingRuleNamespacesChan, routingRuleErrs, err := c.routingRule.Watch(namespace, opts)
+		if err != nil {
+			return nil, nil, errors.Wrapf(err, "starting RoutingRule watch")
+		}
+
+		done.Add(1)
+		go func(namespace string) {
+			defer done.Done()
+			errutils.AggregateErrs(ctx, errs, routingRuleErrs, namespace+"-routingrules")
 		}(namespace)
 
 		/* Watch for changes and update snapshot */
@@ -213,17 +213,11 @@ func (c *translatorEmitter) Snapshots(watchNamespaces []string, opts clients.Wat
 				select {
 				case <-ctx.Done():
 					return
-				case meshList := <-meshNamespacesChan:
+				case secretList := <-secretNamespacesChan:
 					select {
 					case <-ctx.Done():
 						return
-					case meshChan <- meshListWithNamespace{list: meshList, namespace: namespace}:
-					}
-				case routingRuleList := <-routingRuleNamespacesChan:
-					select {
-					case <-ctx.Done():
-						return
-					case routingRuleChan <- routingRuleListWithNamespace{list: routingRuleList, namespace: namespace}:
+					case secretChan <- secretListWithNamespace{list: secretList, namespace: namespace}:
 					}
 				case upstreamList := <-upstreamNamespacesChan:
 					select {
@@ -237,11 +231,17 @@ func (c *translatorEmitter) Snapshots(watchNamespaces []string, opts clients.Wat
 						return
 					case istioCacertsSecretChan <- istioCacertsSecretListWithNamespace{list: istioCacertsSecretList, namespace: namespace}:
 					}
-				case secretList := <-secretNamespacesChan:
+				case meshList := <-meshNamespacesChan:
 					select {
 					case <-ctx.Done():
 						return
-					case secretChan <- secretListWithNamespace{list: secretList, namespace: namespace}:
+					case meshChan <- meshListWithNamespace{list: meshList, namespace: namespace}:
+					}
+				case routingRuleList := <-routingRuleNamespacesChan:
+					select {
+					case <-ctx.Done():
+						return
+					case routingRuleChan <- routingRuleListWithNamespace{list: routingRuleList, namespace: namespace}:
 					}
 				}
 			}
@@ -268,14 +268,10 @@ func (c *translatorEmitter) Snapshots(watchNamespaces []string, opts clients.Wat
 		   		// construct the first snapshot from all the configs that are currently there
 		   		// that guarantees that the first snapshot contains all the data.
 		   		for range watchNamespaces {
-		      meshNamespacedList := <- meshChan
-		      currentSnapshot.Meshes.Clear(meshNamespacedList.namespace)
-		      meshList := meshNamespacedList.list
-		   	currentSnapshot.Meshes.Add(meshList...)
-		      routingRuleNamespacedList := <- routingRuleChan
-		      currentSnapshot.Routingrules.Clear(routingRuleNamespacedList.namespace)
-		      routingRuleList := routingRuleNamespacedList.list
-		   	currentSnapshot.Routingrules.Add(routingRuleList...)
+		      secretNamespacedList := <- secretChan
+		      currentSnapshot.Secrets.Clear(secretNamespacedList.namespace)
+		      secretList := secretNamespacedList.list
+		   	currentSnapshot.Secrets.Add(secretList...)
 		      upstreamNamespacedList := <- upstreamChan
 		      currentSnapshot.Upstreams.Clear(upstreamNamespacedList.namespace)
 		      upstreamList := upstreamNamespacedList.list
@@ -284,10 +280,14 @@ func (c *translatorEmitter) Snapshots(watchNamespaces []string, opts clients.Wat
 		      currentSnapshot.Istiocerts.Clear(istioCacertsSecretNamespacedList.namespace)
 		      istioCacertsSecretList := istioCacertsSecretNamespacedList.list
 		   	currentSnapshot.Istiocerts.Add(istioCacertsSecretList...)
-		      secretNamespacedList := <- secretChan
-		      currentSnapshot.Secrets.Clear(secretNamespacedList.namespace)
-		      secretList := secretNamespacedList.list
-		   	currentSnapshot.Secrets.Add(secretList...)
+		      meshNamespacedList := <- meshChan
+		      currentSnapshot.Meshes.Clear(meshNamespacedList.namespace)
+		      meshList := meshNamespacedList.list
+		   	currentSnapshot.Meshes.Add(meshList...)
+		      routingRuleNamespacedList := <- routingRuleChan
+		      currentSnapshot.Routingrules.Clear(routingRuleNamespacedList.namespace)
+		      routingRuleList := routingRuleNamespacedList.list
+		   	currentSnapshot.Routingrules.Add(routingRuleList...)
 		   		}
 		*/
 
@@ -305,22 +305,14 @@ func (c *translatorEmitter) Snapshots(watchNamespaces []string, opts clients.Wat
 			case <-c.forceEmit:
 				sentSnapshot := currentSnapshot.Clone()
 				snapshots <- &sentSnapshot
-			case meshNamespacedList := <-meshChan:
+			case secretNamespacedList := <-secretChan:
 				record()
 
-				namespace := meshNamespacedList.namespace
-				meshList := meshNamespacedList.list
+				namespace := secretNamespacedList.namespace
+				secretList := secretNamespacedList.list
 
-				currentSnapshot.Meshes.Clear(namespace)
-				currentSnapshot.Meshes.Add(meshList...)
-			case routingRuleNamespacedList := <-routingRuleChan:
-				record()
-
-				namespace := routingRuleNamespacedList.namespace
-				routingRuleList := routingRuleNamespacedList.list
-
-				currentSnapshot.Routingrules.Clear(namespace)
-				currentSnapshot.Routingrules.Add(routingRuleList...)
+				currentSnapshot.Secrets.Clear(namespace)
+				currentSnapshot.Secrets.Add(secretList...)
 			case upstreamNamespacedList := <-upstreamChan:
 				record()
 
@@ -337,14 +329,22 @@ func (c *translatorEmitter) Snapshots(watchNamespaces []string, opts clients.Wat
 
 				currentSnapshot.Istiocerts.Clear(namespace)
 				currentSnapshot.Istiocerts.Add(istioCacertsSecretList...)
-			case secretNamespacedList := <-secretChan:
+			case meshNamespacedList := <-meshChan:
 				record()
 
-				namespace := secretNamespacedList.namespace
-				secretList := secretNamespacedList.list
+				namespace := meshNamespacedList.namespace
+				meshList := meshNamespacedList.list
 
-				currentSnapshot.Secrets.Clear(namespace)
-				currentSnapshot.Secrets.Add(secretList...)
+				currentSnapshot.Meshes.Clear(namespace)
+				currentSnapshot.Meshes.Add(meshList...)
+			case routingRuleNamespacedList := <-routingRuleChan:
+				record()
+
+				namespace := routingRuleNamespacedList.namespace
+				routingRuleList := routingRuleNamespacedList.list
+
+				currentSnapshot.Routingrules.Clear(namespace)
+				currentSnapshot.Routingrules.Add(routingRuleList...)
 			}
 		}
 	}()
